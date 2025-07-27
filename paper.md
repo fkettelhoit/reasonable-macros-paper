@@ -1,5 +1,5 @@
 ---
-title: "Resonable macros through explicit bindings"
+title: "Reasonable macros through explicit bindings"
 author:
   - |
     Frederic Kettelhoit\
@@ -45,7 +45,7 @@ We introduce a syntactic distinction that governs evaluation behavior:
 
 This marking scheme enables what we term _reasonable macros_: functions that can access syntactic structure when needed while preserving static reasoning for unmarked expressions:
 
-```javascript
+```java
 // no bindings, equivalent to f(4)
 f(2 + 2)
 
@@ -64,7 +64,7 @@ To support static reasoning while allowing user-defined binding constructs, vari
 
 As a more concrete example, let us consider the following function call:
 
-```javascript
+```java
 foo(:x, y, { bar(x) })
 //  |      \________/
 //  |      scope of x
@@ -74,13 +74,13 @@ foo(:x, y, { bar(x) })
 
 Both the scope and the origin of the variable `x` in the block `{ bar(x) }` are determined syntactically, without knowing the definition of `foo` (and thus without knowing whether `foo` is a macro or a regular function). Since the explicit binding `:x` appears to the left of the block `{ bar(x) }`, the block is desugared to a lambda abstraction with the bound variable `x`.
 
-More precisely, the association between explicit bindings and blocks works as follows: A function `f` with non-block arguments `f_0 ... f_m-1`, a block `{ ... }` as argument `f_m`, and further arguments `f_m+1 ... f_n` desugars the block into a curried lambda abstraction of `k` bound variables and consumes these bindings (making them unavailable to blocks occurring after `f_m`), where `k` is the number of explicit bindings occurring in the arguments `f_0 ... f_m-1` that are not consumed by other blocks.
+More precisely, the association between explicit bindings and blocks works as follows: A function call $f(f_1, \ldots, f_{m-1}, \{ \text{body} \}, f_{m+1}, \ldots, f_n)$ where $\{ \text{body} \}$ is a block argument at position $m$ desugars the block $\{ \text{body} \}$ to a lambda abstraction that binds all explicit bindings occurring in the arguments $f_0, \ldots, f_{m-1}$ that have not been consumed by other blocks appearing earlier in those arguments. The block $\{ \text{body} \}$ is transformed into $\lambda x_1 \ldots x_k. \text{body}$ where $x_1, \ldots, x_k$ are the unconsumed explicit bindings from the preceding arguments, and these bindings are marked as consumed for subsequent blocks in the same function call or enclosing expressions.
 
 ## Nested blocks
 
 Sequential binding operations using the explicit form can lead to deeply nested structures that impair readability. Consider a series of variable bindings:
 
-```javascript
+```java
 let(:a, x, {
   let(:b, y, {
     let(:c, z, {
@@ -92,7 +92,7 @@ let(:a, x, {
 
 While this nesting clearly shows the scope structure, it becomes unwieldy for longer sequences. To address this, we introduce syntactic sugar that allows blocks to consume bindings by enclosing them:
 
-```javascript
+```java
 {
   let(:x, y),
   f(x)
@@ -103,7 +103,7 @@ This block-enclosed syntax is equivalent to the more explicit form `let(:x, y, {
 
 The approach scales naturally to multiple nested bindings:
 
-```javascript
+```java
 {
   let(:a, x),
   let(:b, y),
@@ -115,7 +115,7 @@ This desugars to `let(:a, x, { let(:b, y, { f(a, b) }) })`, creating the expecte
 
 To handle expressions that do not introduce bindings (such as side effects), the system treats non-binding block elements differently. When a block element contains no explicit bindings that could be consumed by the enclosing block, the element is evaluated as an argument to an anonymous function that returns the rest of the block:
 
-```javascript
+```java
 {
   let(:x, Foo),
   print("..."),
@@ -135,27 +135,38 @@ Macro definitions are distinguished from regular function definitions through a 
 
 When a macro is applied to arguments, its arguments undergo a static transformation that makes syntactic structure observable. Arguments are wrapped in data structures that preserve the distinction between evaluated expressions and syntactic elements that contain explicit bindings. This transformation occurs during the desugaring phase, before any evaluation takes place and relies only on syntactic information.
 
-The argument transformation follows these patterns:
+\begin{small}
+\begin{align}
+x &\to \text{Value}(x) \\
+:x &\to \text{Binding}(\text{"x"}) \\
+\{ \ldots \} &\to \text{Block}(\ldots) \\
+f(x, y) &\to \text{Value}(f(x, y)) \\
+f(x, :y) &\to \text{Call}(\text{Value}(f), [\text{Value}(x), \text{Binding}(\text{"y"})]) \\
+:f(x, y) &\to \text{Call}(\text{Binding}(\text{"f"}), [\text{Value}(x), \text{Value}(y)])
+\end{align}
+\end{small}
 
-```javascript
-f(x)          // f(Value(x))
-f(:x)         // f(Binding("x"))
-f(bar(x, y))  // f(Value(bar(x, y)))
-f(bar(x, :y)) // f(Call(Value(bar), [Value(x), Binding("y")]))
-f(:bar(x, y)) // f(Call(Binding("bar"), [Value(x), Value(y)]))
-```
+In the case of `f(x, :y)`, the presence of the explicit binding `:y` prevents the entire expression from being evaluated. Instead, it is preserved as a `Call` structure that contains both evaluated components (`Value(x)`) and syntactic components (`Binding("y")`). This selective preservation allows macros to observe syntactic structure precisely where it is explicitly marked, while maintaining referential transparency for unmarked subexpressions.
 
-In the case of `foo(bar(x, :y))`, the presence of the explicit binding `:y` within the `bar` call prevents the entire expression from being evaluated. Instead, it is preserved as a `Call` structure that contains both evaluated components (`Value(x)`) and syntactic components (`Binding("y")`). This selective preservation allows macros to observe syntactic structure precisely where it is explicitly marked, while maintaining referential transparency for unmarked subexpressions.
+More formally, when a macro $f$ is applied to arguments $a_1, a_2, \ldots, a_n$, each argument $a_i$ is transformed according to the function $\text{wrap}(a_i)$ defined as:
+
+$\text{wrap}(a) = \begin{cases}
+\text{Binding}(\text{name}) \\\quad \text{if } a \text{ is a binding expression } :name \\
+\text{Block}(\text{content}) \\\quad \text{if } a \text{ is a block expression } \{ \ldots \} \\
+\text{Call}(\text{wrap}(f), [\text{wrap}(a_1), \ldots, \text{wrap}(a_n)]) \\\quad \text{if } a = f(a_1, \ldots, a_n) \\\quad \text{and } \text{wrap}(f) \neq \text{Value}(\ldots) \\
+\text{Call}(\text{wrap}(f), [\text{wrap}(a_1), \ldots, \text{wrap}(a_n)]) \\\quad \text{if } a = f(a_1, \ldots, a_n) \\\quad \text{and } f \text{ is not a macro} \\\quad \text{and any } \text{wrap}(a_i) \neq \text{Value}(\ldots) \\
+\text{Value}(a) \\\quad \text{otherwise}
+\end{cases}$
 
 ## Multi-level bindings
 
 The basic explicit binding mechanism supports bindings that are active in the immediately following scope, but many programming constructs require bindings that persist across multiple scope levels. A prominent example is the definition of a recursive function, where the function being defined must be available both within its own definition (for recursive calls) and in the scope following the definition (for external use).
 
-Multi-level bindings extend the explicit binding syntax to support this pattern through repeated markers. While single-level bindings use one marker (`:x`), multi-level bindings use multiple markers to indicate their scope lifetime. A binding `::x` remains active for the next two scopes, `:::x` for three scopes, and so on.
+Multi-level bindings extend the explicit binding syntax to support this pattern through repeated markers. A binding `::x` remains active for the next two scopes, `:::x` for three scopes, and so on.
 
 Consider the definition of a recursive function:
 
-```javascript
+```java
 {
   ::factorial(:n) = {
     if(n == 0, 1, n * factorial(n - 1))
@@ -167,175 +178,6 @@ Consider the definition of a recursive function:
 The `::factorial` binding with two markers indicates that the function will be available both within its own definition (enabling the recursive call `factorial(n - 1)`) and in the subsequent scope (enabling the call `factorial(5)`).
 
 The multi-level binding mechanism preserves static analyzability by making the scope lifetime explicit in the syntax. A static analyzer can determine the availability of any identifier by counting binding markers and tracking scope nesting levels, without requiring knowledge of the specific constructs being used.
-
-# Algorithm
-
-TODO: Present a pseudocode algorithm to desugar reasonable macros + explicit bindings into cbv lambda calculus, based on the following Rust code:
-
-```
-
-#[derive(Debug, Clone)]
-pub struct Ast(pub usize, pub A);
-
-#[derive(Debug, Clone)]
-pub enum A {
-    Var(String),
-    Atom(String),
-    String(String),
-    Binding(usize, BindType, String),
-    Block(Vec<Ast>),
-    Call(Box<Ast>, Vec<Ast>),
-}
-
-#[derive(Debug, Clone)]
-pub enum Expr {
-    Var(usize),
-    String(usize),
-    Effect(usize),
-    Abs(Box<Expr>),
-    Rec(Box<Expr>),
-    App(Box<Expr>, Box<Expr>),
-    Type(Box<Expr>),
-    Unpack([Box<Expr>; 3]),
-    Handle([Box<Expr>; 2]),
-    Compare([Box<Expr>; 4]),
-}
-
-pub fn abs(body: Expr) -> Expr {
-    Expr::Abs(Box::new(body))
-}
-
-pub fn app(f: Expr, arg: Expr) -> Expr {
-    Expr::App(Box::new(f), Box::new(arg))
-}
-
-pub fn nil() -> Expr {
-    Expr::String(Str::Nil as usize)
-}
-
-pub fn desugar<'c>(block: Vec<Ast>, code: &'c str, ctx: &mut Ctx) -> Result<Expr, String> {
-    fn resolve_var(v: &str, ctx: &Ctx) -> Option<usize> {
-        ctx.vars.iter().rev().position(|(_, x)| *x == v)
-    }
-    fn resolve_str<'c>(s: String, ctx: &mut Ctx) -> usize {
-        ctx.strs.iter().position(|x| *x == s).unwrap_or_else(|| {
-            ctx.strs.push(s);
-            ctx.strs.len() - 1
-        })
-    }
-    fn is_macro(Ast(_, ast): &Ast, ctx: &Ctx) -> bool {
-        if let A::Var(v) = ast {
-            if let Some((BindType::Macro, _)) = ctx.vars.iter().rev().find(|(_, x)| x == v) {
-                return true;
-            }
-        }
-        false
-    }
-    fn has_bindings(Ast(_, ast): &Ast, ctx: &Ctx) -> bool {
-        match ast {
-            A::Binding(_, _, _) => true,
-            A::Var(_) | A::Atom(_) | A::String(_) | A::Block(_) => false,
-            A::Call(f, _) if is_macro(f, ctx) => false,
-            A::Call(f, _) if has_bindings(f, ctx) => true,
-            A::Call(_, args) => args.iter().any(|arg| has_bindings(arg, ctx)),
-        }
-    }
-    fn desug_macro(ast: Ast, ctx: &mut Ctx) -> Result<Expr, (usize, String)> {
-        fn desug_all(xs: Vec<Ast>, ctx: &mut Ctx) -> Result<Vec<Expr>, (usize, String)> {
-            xs.into_iter().map(|x| desug_macro(x, ctx)).collect()
-        }
-        match ast.1 {
-            A::Call(f, args) if has_bindings(&ast, ctx) => {
-                let f = desug_macro(*f, ctx)?;
-                let args = desug_all(args, ctx)?;
-                let list = args.into_iter().fold(nil(), |l, x| app(l, x));
-                Ok(app(app(Expr::String(Str::Compound as usize), f), list))
-            }
-            A::Var(_) | A::Atom(_) | A::String(_) | A::Call(_, _) => {
-                Ok(app(Expr::String(Str::Value as usize), desug_val(ast, ctx)?))
-            }
-            A::Binding(_, _, _) => {
-                Ok(app(Expr::String(Str::Binding as usize), desug_val(ast, ctx)?))
-            }
-            A::Block(_) => desug_val(ast, ctx),
-        }
-    }
-    fn desug_val<'c>(Ast(pos, ast): Ast, ctx: &mut Ctx) -> Result<Expr, (usize, String)> {
-        match ast {
-            A::Var(v) if v.ends_with("!") => {
-                Ok(Expr::Effect(resolve_str(v[..v.len() - 1].to_string(), ctx)))
-            }
-            A::Var(v) => match resolve_var(&v, ctx) {
-                Some(v) => Ok(Expr::Var(v)),
-                None => match v.as_str() {
-                    "=" => Ok(abs(abs(abs(app(Expr::Var(0), Expr::Var(1)))))),
-                    "=>" => Ok(abs(abs(Expr::Var(0)))),
-                    "~>" => Ok(abs(abs(Expr::Rec(Box::new(Expr::Var(0)))))),
-                    "type" => Ok(abs(Expr::Type(Box::new(Expr::Var(0))))),
-                    "__compare" => Ok(abs(abs(abs(abs(Expr::Compare(
-                        [3, 2, 1, 0].map(|v| Expr::Var(v).into()),
-                    )))))),
-                    "__unpack" => {
-                        Ok(abs(abs(abs(Expr::Unpack([2, 1, 0].map(|v| Expr::Var(v).into()))))))
-                    }
-                    "__handle" => Ok(abs(abs(Expr::Handle([1, 0].map(|v| Expr::Var(v).into()))))),
-                    _ => Err((pos, v.to_string())),
-                },
-            },
-            A::Atom(s) => Ok(Expr::String(resolve_str(s.to_string(), ctx))),
-            A::String(s) => Ok(Expr::String(resolve_str(format!("\"{s}\""), ctx))),
-            A::Binding(lvl, c, b) => {
-                ctx.bindings.push((lvl, c, b.to_string()));
-                Ok(Expr::String(resolve_str(format!("\"{b}\""), ctx)))
-            }
-            A::Block(mut items) => {
-                let mut desugared = vec![];
-                if items.is_empty() {
-                    items.push(Ast(pos, A::Atom(NIL.to_string())));
-                }
-                for ast in items {
-                    let bindings = ctx.bindings.len();
-                    let drained = ctx.drain_bindings();
-                    ctx.vars.extend(drained);
-                    if bindings == 0 {
-                        ctx.vars.push((BindType::Variable, String::new()))
-                    }
-                    desugared.push((bindings, desug_val(ast, ctx)?));
-                }
-                let (mut bindings, mut expr) = desugared.pop().unwrap();
-                expr = (0..max(1, bindings)).fold(expr, |x, _| abs(x));
-                for (prev_bindings, x) in desugared.into_iter().rev() {
-                    let (f, arg) = if bindings == 0 { (expr, x) } else { (x, expr) };
-                    expr = (0..max(1, prev_bindings)).fold(app(f, arg), |x, _| abs(x));
-                    ctx.vars.truncate(ctx.vars.len() - max(1, bindings));
-                    bindings = prev_bindings;
-                }
-                ctx.vars.truncate(ctx.vars.len() - max(1, bindings));
-                ctx.clear_bindings();
-                Ok(expr)
-            }
-            A::Call(f, args) => {
-                let bindings = mem::replace(&mut ctx.bindings, vec![]);
-                let is_macro = is_macro(&f, ctx);
-                let mut f = desug_val(*f, ctx)?;
-                if args.is_empty() {
-                    f = app(f, nil());
-                }
-                for x in args {
-                    f = app(f, if is_macro { desug_macro(x, ctx)? } else { desug_val(x, ctx)? })
-                }
-                ctx.bindings.splice(0..0, bindings);
-                Ok(f)
-            }
-        }
-    }
-    match desug_val(Ast(0, A::Block(block)), ctx) {
-        Err((i, v)) => Err(format!("Unbound variable '{v}' at {}", pos_at(i, code))),
-        Ok(Expr::Abs(body)) => Ok(*body),
-        Ok(_) => unreachable!("Expected the main block to be desugared to an abstraction!"),
-    }
-}
-```
 
 # Related work
 
