@@ -7,7 +7,7 @@ author:
     fred@fkettelhoit.com
 date: \today
 abstract: |
-  We present macros that can be reasoned about statically without requiring a macro expansion phase. This is achieved by distinguishing variables that are being _bound_ from variables that are being _used_, in combination with _explicit block scopes_. The resulting macro system enables _local reasoning_, by supporting local evaluation without requiring full knowledge of the macros in scope.
+  We present macros that can be statically reasoned about without requiring a macro expansion phase. This is achieved by distinguishing variables that are being _bound_ from variables that are being _used_, in combination with _explicit block scopes_. The resulting macro system enables _local reasoning_, by supporting local evaluation without requiring full knowledge of the macros in scope.
 ---
 
 # Introduction
@@ -18,15 +18,15 @@ Modern programming languages face a fundamental tension between expressiveness a
 
 The design of extensible programming languages has long grappled with the challenge of allowing user-defined constructs without sacrificing analyzability. Consider the requirement that every function or control structure in a language should be redefinable, including fundamental operations such as variable assignment. While a language may provide built-in syntax for expressions like `a = 5`, the goal is to enable user-defined functions to achieve equivalent functionality, such as through a function `let` invoked as `let(a, 5)`.
 
-Traditional approaches to this problem have relied on Lisp-style macro systems, dating all the way back to Lisp 1.5 [@hart1963macro;@steele1996evolution]. In such systems, `let` can be implemented as a macro that treats its first argument `a` as an unevaluated symbol rather than a variable reference, evaluates the second argument `5`, and then invokes the built-in assignment operation to bind the symbol `a` to the value 5. However, this approach introduces significant complications:
+Traditional approaches to this problem have relied on Lisp-style macro systems, dating back to Lisp 1.5 [@hart1963macro;@steele1996evolution]. In such systems, `let` can be implemented as a macro that treats its first argument `a` as an unevaluated symbol rather than a variable reference, evaluates the second argument `5`, and then invokes the built-in assignment operation to bind the symbol `a` to the value 5. However, this approach introduces significant complications:
 
-1. **Complexity**: Macro systems add substantial language complexity, particularly regarding macro hygiene: the challenge of preventing unintended variable capture and ensuring that macro expansions do not interfere with the lexical scoping of the surrounding code [@kohlbecker1986hygienic].
+1. **Complexity**: Macro systems add substantial complexity to the language, particularly regarding macro hygiene: the challenge of preventing unintended variable capture and ensuring that macro expansions do not interfere with the lexical scoping of the surrounding code [@kohlbecker1986hygienic].
 
 2. **Static analysis impediments**: The presence of macros fundamentally undermines static reasoning about program behavior. Given an expression such as `foo(2 + 2)`, one cannot determine whether this can be simplified to `foo(4)` without first resolving whether `foo` is a macro. Macros can observe and act upon syntactic differences between expressions that are semantically equivalent, necessitating macro resolution before any program optimization or analysis can occur.
 
 # Contribution
 
-This work proposes a alternative approach that achieves most of the expressiveness of traditional macro systems while maintaining the ability to perform static analysis. Our key insight is to explicitly distinguish between variables that are being **bound** (newly introduced into scope) and variables that are being **used** (referenced from existing scope). This distinction, combined with explicit block scoping, enables what we term **reasonable macros**: extensible language constructs that can be analyzed statically without prior macro expansion.
+This work proposes an alternative approach that achieves most of the expressiveness of traditional macro systems while maintaining the ability to perform static analysis. Our key insight is to explicitly distinguish between variables that are being **bound** (newly introduced into scope) and variables that are being **used** (referenced from existing scope). This distinction, combined with explicit block scoping, enables what we term **reasonable macros**: extensible language constructs that can be analyzed statically without prior macro expansion.
 
 The fundamental guiding principle of our design is:
 
@@ -34,7 +34,7 @@ _Every construct in the language can be redefined without privileged language co
 
 # Technical approach
 
-Our approach bridges the gap between fexprs and traditional macros through _selective evaluation_ based on syntactic markers. The core insight is that evaluation behavior can be determined purely syntactically: expressions containing explicit binding markers remain unevaluated for structural manipulation, while unmarked expressions are evaluated normally. This guarantees that macros can observe syntactic differences only in the presence of explicit binding markers, in all other cases semantically equivalent expressions can be freely substitued for each other, ensuring that referential transparency is preserved.
+Our approach bridges the gap between fexprs and traditional macros through _selective evaluation_ based on syntactic markers. The core insight is that evaluation behavior can be determined purely syntactically: expressions containing explicit binding markers remain unevaluated for structural manipulation, while unmarked expressions are evaluated normally. This guarantees that macros can observe syntactic differences only in the presence of explicit binding markers, in all other cases semantically equivalent expressions can be freely substituted for each other, ensuring that referential transparency is preserved.
 
 ## Explicit bindings
 
@@ -133,7 +133,7 @@ To complete the macro system, we need mechanisms for defining constructs that ca
 
 Macro definitions are distinguished from regular function definitions through a syntactic marker. A macro definition uses the `#` prefix (e.g., `#f = ...`), while regular function definitions use standard syntax (e.g., `:f = ...`). The environment tracks both the names in scope and their classification as either macros or regular values. This distinction matters only during the desugaring phase when translating to call-by-value lambda calculus; it does not impact the evaluation rules, which can continue to use standard lambda calculus environments.
 
-When a macro is applied to arguments, its arguments undergo a static transformation that makes syntactic structure observable. Arguments are wrapped in data structures that preserve the distinction between evaluated expressions and syntactic elements that contain explicit bindings. This transformation occurs during the desugaring phase, before any evaluation takes place and relies only on syntactic information.
+When a macro is applied to arguments, its arguments undergo a static transformation that makes syntactic structure observable. Arguments are wrapped in data structures that preserve the distinction between evaluated expressions and syntactic elements that contain explicit bindings. This transformation occurs during the desugaring phase, before any evaluation takes place, and relies only on syntactic information.
 
 \begin{small}
 \begin{align}
