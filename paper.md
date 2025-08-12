@@ -77,9 +77,6 @@ If `=` implements standard pattern matching with unification (and throws an exce
 
 Crucially, however, it is safe to evaluate `2 + 2` even if `=` is implemented differently and e.g., does not implement pattern matching at all. In contrast to traditional macro systems, the syntactic distinction between bound and used variables guarantees that evaluation behavior remains statically tractable and exposes only explicitly annotated expressions as syntactically observable macro arguments.
 
-TODO: expand the following paragraph
-More precisely, explicit bindings and implicit uses inside of an enclosing scope are translated to lambda terms as follows: ...
-
 ## Explicit scope
 
 It is common for binding constructs in traditional languages to bind variables not just in the _enclosing_ scope, but also in _explicit block scopes_ that are used as part of a binding construct. Examples are constructs for declaring anonymous functions, which bind function arguments in the body of the function, as well as pattern matching constructs, which bind pattern variables in the body of a match clause.
