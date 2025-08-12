@@ -12,7 +12,7 @@ abstract: |
 
 # Introduction
 
-Modern programming languages face a fundamental tension between expressiveness and static analyzability. While macro systems provide the flexibility to define custom control structures and extend language syntax, they often compromise the ability to reason about programs statically. This paper introduces a novel approach to resolve this tension through _explicit bindings_, a mechanism that enables macro-like expressiveness while preserving static reasoning capabilities.
+Modern programming languages face a fundamental tension between expressiveness and static analyzability. While macro systems provide the flexibility to define custom control structures and extend language syntax, they often compromise the ability to reason about programs statically. This paper introduces a novel approach to resolve this tension through _explicit bindings_, a mechanism that enables macro-like expressiveness while preserving static reasoning capabilities and maintaining compatibility with conventional variable scoping patterns found in mainstream programming languages.
 
 # Motivation
 
@@ -26,39 +26,99 @@ Traditional approaches to this problem have relied on Lisp-style macro systems, 
 
 # Contribution
 
-This work proposes an alternative approach that achieves most of the expressiveness of traditional macro systems while maintaining the ability to perform static analysis. Our key insight is to explicitly distinguish between variables that are being **bound** (newly introduced into scope) and variables that are being **used** (referenced from existing scope). This distinction, combined with explicit block scoping, enables what we term **reasonable macros**: extensible language constructs that can be analyzed statically without prior macro expansion.
+This work proposes an alternative approach that achieves most of the expressiveness of traditional macro systems while maintaining the ability to perform static analysis and preserving familiar variable scoping semantics. Our key insight is to explicitly distinguish between variables that are being **bound** (newly introduced into scope) and variables that are being **used** (referenced from existing scope), using syntactic markers that align closely with how variable scopes work in mainstream programming languages.
 
-The fundamental guiding principle of our design is:
+This distinction, combined with explicit block scoping, enables what we term **reasonable macros**: extensible language constructs that can be analyzed statically without prior macro expansion. The fundamental guiding principle of our design is:
 
 _Every construct in the language can be redefined without privileged language constructs, while the scope and binding structure of variables remains immediately apparent from the source code alone, without requiring evaluation of any function or macro._
 
 # Technical approach
 
-Our approach bridges the gap between fexprs and traditional macros through _selective evaluation_ based on syntactic markers. The core insight is that evaluation behavior can be determined purely syntactically: expressions containing explicit binding markers remain unevaluated for structural manipulation, while unmarked expressions are evaluated normally. This guarantees that macros can observe syntactic differences only in the presence of explicit binding markers, in all other cases semantically equivalent expressions can be freely substituted for each other, ensuring that referential transparency is preserved.
+Our approach bridges the gap between fexprs and traditional macros through _selective evaluation_ based on syntactic markers. The core insight is that evaluation behavior can be determined purely syntactically: expressions containing explicit binding markers remain unevaluated for structural manipulation, while unmarked expressions are evaluated normally. This guarantees that macros can observe syntactic differences only in the presence of explicit binding markers. In all other cases semantically equivalent expressions can be freely substituted for each other, ensuring that referential transparency is preserved.
 
 ## Explicit bindings
 
 We introduce a syntactic distinction that governs evaluation behavior:
 
-- **Variable Usage**: Variables resolved from existing scope use standard notation (e.g., `x`)
-- **Variable Binding**: Variables that introduce fresh bindings are prefixed with a marker (e.g., `:x`)
+- **Variable Usage**: Variables that are resolved use standard notation (e.g., `x`)
+- **Variable Binding**: Variables that introduce fresh bindings are marked syntactically (e.g., `:x`)
 
 This marking scheme enables what we term _reasonable macros_: functions that can access syntactic structure when needed while preserving static reasoning for unmarked expressions:
 
+Consider destructuring assignment as our running example:
+
 ```java
-// no bindings, equivalent to f(4)
-f(2 + 2)
-
-// :x remains unevaluated
-f(:x)
-
-// :x unevaluated, y + z evaluated
-f(:x, y + z)
+// assuming point is in scope
+(:x, :y) = point  // both x and y are bound
+use_point(x, y)   // x and y are used
 ```
 
-The presence of binding markers provides a syntactic guarantee about evaluation behavior, eliminating the need for runtime type checking (as in fexprs) or complete macro expansion (as in traditional macro systems).
+Here, the assignment operator `=` can be implemented as a user-defined infix macro that observes the binding structure `(:x, :y)` while evaluating `point` normally. The scope of the newly bound variables `x` and `y` extends through the remainder of the enclosing block.
 
-## Explicit block scope
+The syntactic difference between bound and used variables makes it immediately clear which subexpressions can be evaluated, even in the presence of macros. The presence of binding markers provides a syntactic guarantee about evaluation behavior, eliminating the need for runtime evaluation (as in fexprs) or complete macro expansion (as in traditional macro systems).
+
+Without knowing how the assignment macro `=` is defined, it is immediately obvious which argument (sub-)expressions are evaluated:
+
+```java
+// x and y are bound
+(:x, :y) = point
+
+// x is bound, z is resolved
+(:x, z) = point
+
+// x is bound, 2 + 2 is evaluated
+(:x, 2 + 2) = point
+
+// x is bound
+(:x, :x) = point
+```
+
+If `=` implements standard pattern matching with unification (and throws an exception if the pattern on the left does not match the value on the right), the first example would be an irrefutable match, whereas the second and third examples would match only if the second element of the pair has a particular value, while the last example would only match if both elements can be unified.
+
+Crucially, however, it is safe to evaluate `2 + 2` even if `=` is implemented differently and e.g., does not implement pattern matching at all. In contrast to traditional macro systems, the syntactic distinction between bound and used variables guarantees that evaluation behavior remains statically tractable and exposes only explicitly annotated expressions as syntactically observable macro arguments.
+
+TODO: expand the following paragraph
+More precisely, explicit bindings and implicit uses inside of an enclosing scope are translated to lambda terms as follows: ...
+
+## Explicit scope
+
+It is common for binding constructs in traditional languages to bind variables not just in the _enclosing_ scope, but also in _explicit block scopes_ that are used as part of a binding construct. Examples are constructs for declaring anonymous functions, which bind function arguments in the body of the function, as well as pattern matching constructs, which bind pattern variables in the body of a match clause.
+
+We will mark explicit block scope syntactically by enclosing a sequence of expressions in `{...}`. Whenever a function is called with an explicit block as one of its arguments, the evaluation behavior of the remaining arguments is defined as follows:
+
+- **Variable Binding**: Variables that introduce fresh bindings use standard notation (e.g., `x`)
+- **Variable Usage**: Variables that are resolved are marked syntactically (e.g., `^x`)
+
+This marking scheme is thus dual to the marking scheme used for the enclosing scope: In the enclosing scope, bound variables are explicitly marked, whereas for explicitly marked block scopes, used variables are explicitly marked.
+
+Consider pattern matching as an example involving explicit block scope:
+
+```java
+// assuming point and z are in scope
+match (point) [
+    (x, y) -> { use_point(x, y) } // x and y are bound
+    (x, ^z) -> { use_first(x) }   // x bound, z used
+]
+```
+
+As in the case of explicit bindings used within the enclosing scope, it is immediately obvious which argument (sub-)expressions are evaluated:
+
+```java
+match (point) [
+  (x, x) -> {
+    // x is bound
+  }
+  (x, ^z) -> {
+    // x is bound, z is resolved
+  }
+  (x, y) -> {
+    // x and y are bound
+  }
+]
+```
+
+TODO: expand the following paragraph
+More precisely, explicit uses and explicit uses in the presence of block scope arguments are translated to lambda terms as follows: ...
 
 To support static reasoning while allowing user-defined binding constructs, variable scope must be tracked syntactically. We employ explicit block syntax `{ ... }` with the innovation that binding declarations are separated from their scope blocks. Such a block is equivalent to a lambda abstraction that does not specify its bound variables explicitly but rather determines them based on the explicit bindings that appear to its left in the abstract syntax tree. This separation enables precise control over variable binding while maintaining syntactic clarity about scope boundaries.
 
