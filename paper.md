@@ -254,7 +254,25 @@ Desugars to:
 )
 ```
 
-More formally, TODO: ...
+More formally, let $E = [e_1, e_2, \ldots, e_n]$ be a sequence of expressions within an enclosing scope. The translation $\mathcal{T}(E)$ is defined recursively using a right fold operation:
+
+$$\mathcal{T}([e]) = e \quad \text{(base case)}$$
+
+$$
+\mathcal{T}([e_1, e_2, \ldots, e_n]) = \begin{cases}
+\mathcal{M}(e_1, \mathcal{T}([e_2, \ldots, e_n])) & \\\quad \text{if } e_1 \text{ contains expl. bindings} \\
+(\lambda \_.  \mathcal{T}([e_2, \ldots, e_n]))(e_1) & \\\quad \text{otherwise}
+\end{cases}
+$$
+
+where $\mathcal{M}(e, \text{cont})$ represents the macro transformation of expression $e$ with continuation $\text{cont}$, and is defined as:
+
+$$\mathcal{M}(f(a_1, \ldots, a_k), \text{cont}) =$$
+$$f(\text{wrap}(a_1), \ldots, \text{wrap}(a_k), \lambda x_1 \ldots x_m. \text{cont})$$
+
+where $x_1, \ldots, x_m$ are the variables bound by the explicit bindings in $a_1, \ldots, a_k$.
+
+For expressions without function calls but containing explicit bindings (such as standalone binding declarations), the transformation follows the same pattern by treating the binding construct as a macro that introduces variables into the continuation.
 
 Notice that as a consequence of using enclosing blocks as the mechanism for both binding variables and sequencing effects, it is not possible to use a macro without binding any variables. For example, it is not possible to use destructuring assignment to match the value `x` against the value `y` by writing it as `x = y`, because it would be interpreted as a side effect due to its lack of explicit bindings. We consider this acceptable but note that explicit syntax could be introduced to distinguish these two cases.
 
@@ -275,9 +293,35 @@ Desugars to:
 )
 ```
 
-TODO: extend the following definition to include the `wrap` function:
+More precisely, implicit bindings and explicit uses in the presence of block scope arguments are translated to lambda terms as follows: A function call $f(a_1, \ldots, a_{m-1}, \{ \text{body} \}, a_{m+1}, \ldots, a_n)$ where $\{ \text{body} \}$ is a block argument at position $m$ is transformed as:
 
-More precisely, implicit bindings and explicit uses in the presence of block scope arguments are translated to lambda terms as follows: A function call $f(f_1, \ldots, f_{m-1}, \{ \text{body} \}, f_{m+1}, \ldots, f_n)$ where $\{ \text{body} \}$ is a block argument at position $m$ desugars the block $\{ \text{body} \}$ to a lambda abstraction that binds all variables occurring in the arguments $f_0, \ldots, f_{m-1}$ that are not explicit marked as being used and have not been bound by other blocks appearing earlier in those arguments. The block $\{ \text{body} \}$ is transformed into $\lambda x_1 \ldots x_k. \text{body}$ where $x_1, \ldots, x_k$ are the implicit bindings from the preceding arguments.
+$$f(\text{wrap}(a_1), \ldots, \text{wrap}(a_{m-1}), \lambda x_1 \ldots x_k. \text{body},$$
+$$\text{wrap}(a_{m+1}), \ldots, \text{wrap}(a_n))$$
+
+where $x_1, \ldots, x_k$ are the implicit bindings extracted from the preceding arguments $a_1, \ldots, a_{m-1}$.
+
+The implicit bindings are determined by the function $\text{bind}(a)$ defined as:
+
+$$
+\text{bind}(a) = \begin{cases}
+\{a\} & \text{if } a \text{ is a binding name} \\
+\bigcup_{i=1}^n \text{bind}(a_i) & \text{if } a = g(a_1, \ldots, a_n) \\
+\emptyset & \text{otherwise}
+\end{cases}
+$$
+
+The order of the lambda parameters $x_1, \ldots, x_k$ follows the left-to-right traversal order of their first occurrence in the abstract syntax tree of the preceding arguments.
+
+For multiple block arguments, each block receives the bindings from the unconsumed arguments that precede it:
+
+$$f(a_1, \ldots, a_i, \{ \text{body}_1 \}, a_{i+1}, \ldots, a_j, \{ \text{body}_2 \}, \ldots)$$
+
+becomes:
+
+$$f(\text{wrap}(a_1), \ldots, \text{wrap}(a_i), \lambda \vec{x}. \text{body}_1,$$
+$$\text{wrap}(a_{i+1}), \ldots, \text{wrap}(a_j), \lambda \vec{y}. \text{body}_2, \ldots)$$
+
+where $\vec{x}$ represents the bindings from $a_1, \ldots, a_i$ and $\vec{y}$ represents the bindings from $a_{i+1}, \ldots, a_j$.
 
 # Related work
 
