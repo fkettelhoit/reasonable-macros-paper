@@ -32,7 +32,7 @@ This distinction, combined with explicit block scoping, enables what we term **r
 
 _Every construct in the language can be redefined without privileged language constructs, while the scope and binding structure of variables remains immediately apparent from the source code alone, without requiring evaluation of any function or macro._
 
-# Technical approach
+# Intuition
 
 Our approach bridges the gap between fexprs and traditional macros through _selective evaluation_ based on syntactic markers. The core insight is that evaluation behavior can be determined purely syntactically: expressions containing explicit binding markers remain unevaluated for structural manipulation, while unmarked expressions are evaluated normally. This guarantees that macros can observe syntactic differences only in the presence of explicit binding markers. In all other cases semantically equivalent expressions can be freely substituted for each other, ensuring that referential transparency is preserved.
 
@@ -49,7 +49,7 @@ Consider destructuring assignment as our running example:
 
 ```java
 // assuming point is in scope
-(:x, :y) = point  // both x and y are bound
+(:x, :y) = point  // x and y are bound
 use_point(x, y)   // x and y are used
 ```
 
@@ -84,24 +84,28 @@ More precisely, explicit bindings and implicit uses inside of an enclosing scope
 
 It is common for binding constructs in traditional languages to bind variables not just in the _enclosing_ scope, but also in _explicit block scopes_ that are used as part of a binding construct. Examples are constructs for declaring anonymous functions, which bind function arguments in the body of the function, as well as pattern matching constructs, which bind pattern variables in the body of a match clause.
 
-We will mark explicit block scope syntactically by enclosing a sequence of expressions in `{...}`. Whenever a function is called with an explicit block as one of its arguments, the evaluation behavior of the remaining arguments is defined as follows:
+We will mark explicit block scope syntactically by enclosing a sequence of expressions in `{...}`, with the innovation that binding declarations are separated from their scope blocks. A `{...}` block is equivalent to a lambda abstraction that does not specify its bound variables explicitly but rather determines them based on the explicit bindings that appear to its left in the abstract syntax tree. This separation enables precise control over variable binding while maintaining syntactic clarity about scope boundaries.
+
+Whenever a function is called with an explicit block as one of its arguments, the evaluation behavior of the arguments preceding the block is defined as follows:
 
 - **Variable Binding**: Variables that introduce fresh bindings use standard notation (e.g., `x`)
 - **Variable Usage**: Variables that are resolved are marked syntactically (e.g., `^x`)
 
 This marking scheme is thus dual to the marking scheme used for the enclosing scope: In the enclosing scope, bound variables are explicitly marked, whereas for explicitly marked block scopes, used variables are explicitly marked.
 
-Consider pattern matching as an example involving explicit block scope:
+Consider the pattern matching operator `->` as an example involving explicit block scope:
 
 ```java
 // assuming point and z are in scope
 match (point) [
-    (x, y) -> { use_point(x, y) } // x and y are bound
-    (x, ^z) -> { use_first(x) }   // x bound, z used
+    // x bound, z used
+    (x, ^z) -> {
+      f(x)
+    }
 ]
 ```
 
-As in the case of explicit bindings used within the enclosing scope, it is immediately obvious which argument (sub-)expressions are evaluated:
+As in the case of explicit bindings used within the enclosing scope, it is immediately obvious which argument (sub-)expressions of `->` are evaluated:
 
 ```java
 match (point) [
@@ -117,127 +121,166 @@ match (point) [
 ]
 ```
 
-TODO: expand the following paragraph
-More precisely, explicit uses and explicit uses in the presence of block scope arguments are translated to lambda terms as follows: ...
+## Combining explicit and implicit bindings
 
-To support static reasoning while allowing user-defined binding constructs, variable scope must be tracked syntactically. We employ explicit block syntax `{ ... }` with the innovation that binding declarations are separated from their scope blocks. Such a block is equivalent to a lambda abstraction that does not specify its bound variables explicitly but rather determines them based on the explicit bindings that appear to its left in the abstract syntax tree. This separation enables precise control over variable binding while maintaining syntactic clarity about scope boundaries.
+Some programming constructs require bindings that are bound both in the enclosing scope and inside of an explicit block argument. A prominent example is the definition of a recursive function, where the function being defined must be available both within its own definition (for recursive calls) and in the scope following the definition (for external use). This is easily supported by combining explicit bindings and block scope arguments.
 
-As a more concrete example, let us consider the following function call:
-
-```java
-foo(:x, y, { bar(x) })
-//  |      \________/
-//  |      scope of x
-//  |
-//  '-- binding of x
-```
-
-Both the scope and the origin of the variable `x` in the block `{ bar(x) }` are determined syntactically, without knowing the definition of `foo` (and thus without knowing whether `foo` is a macro or a regular function). Since the explicit binding `:x` appears to the left of the block `{ bar(x) }`, the block is desugared to a lambda abstraction with the bound variable `x`.
-
-More precisely, the association between explicit bindings and blocks works as follows: A function call $f(f_1, \ldots, f_{m-1}, \{ \text{body} \}, f_{m+1}, \ldots, f_n)$ where $\{ \text{body} \}$ is a block argument at position $m$ desugars the block $\{ \text{body} \}$ to a lambda abstraction that binds all explicit bindings occurring in the arguments $f_0, \ldots, f_{m-1}$ that have not been consumed by other blocks appearing earlier in those arguments. The block $\{ \text{body} \}$ is transformed into $\lambda x_1 \ldots x_k. \text{body}$ where $x_1, \ldots, x_k$ are the unconsumed explicit bindings from the preceding arguments, and these bindings are marked as consumed for subsequent blocks in the same function call or enclosing expressions.
-
-## Nested blocks
-
-Sequential binding operations using the explicit form can lead to deeply nested structures that impair readability. Consider a series of variable bindings:
+Consider the definition and application of a recursive function:
 
 ```java
-let(:a, x, {
-  let(:b, y, {
-    let(:c, z, {
-      f(a, b, c)
-    })
-  })
-})
-```
-
-While this nesting clearly shows the scope structure, it becomes unwieldy for longer sequences. To address this, we introduce syntactic sugar that allows blocks to consume bindings by enclosing them:
-
-```java
-{
-  let(:x, y),
-  f(x)
+:factorial(n) = {
+  if (n == 0) {
+    1
+  } else {
+    n * factorial(n - 1)
+  }
 }
+factorial(5)
 ```
 
-This block-enclosed syntax is equivalent to the more explicit form `let(:x, y, { f(x) })`. The desugaring process recognizes that the `let` construct within the block contains an explicit binding `:x` and is followed by another element in the enclosing block, so the binding is automatically consumed by the enclosing block. This transformation preserves the static analyzability of the binding structure while providing more natural syntax for common patterns.
+The explicit `:factorial` binding indicates that the variable will be bound both within its own definition (since it is followed by the explicit block argument of `=`, enabling the recursive call `factorial(n - 1)`) and in the enclosing scope (since it is explicitly marked, enabling the call `factorial(5)`).
 
-The approach scales naturally to multiple nested bindings:
+## Macro resolution through usage
 
-```java
-{
-  let(:a, x),
-  let(:b, y),
-  f(a, b)
-}
-```
+Unlike traditional macro systems that require explicit macro definitions, our approach determines whether a function should be treated as a macro based on how it is used. This usage-based resolution eliminates the need for separate macro definition syntax while preserving static analyzability.
 
-This desugars to `let(:a, x, { let(:b, y, { f(a, b) }) })`, creating the expected nested scope structure. Each binding construct that contains explicit bindings automatically receives the remainder of the block as its block argument.
+A function call is treated as a macro (with arguments wrapped in syntactic annotations) if any of the following conditions hold:
 
-To handle expressions that do not introduce bindings (such as side effects), the system treats non-binding block elements differently. When a block element contains no explicit bindings that could be consumed by the enclosing block, the element is evaluated as an argument to an anonymous function that returns the rest of the block:
+1. **Explicit bindings**: The function is called with explicit binding arguments that can be used in the enclosing scope: `f(:x, y)` or `:result = f(args)`
+2. **Block arguments**: The function is called with block arguments: `f(args, {...})`
 
-```java
-{
-  let(:x, Foo),
-  print("..."),
-  use_x(x)
-}
-```
+When a function is identified as a macro call, its arguments undergo a static transformation that preserves syntactic structure where needed. We first give an informal intuition by listing several examples and formalize the algorithm in the next section. Syntactic annotations add a runtime-observable tag to their wrapped data and are written in smallcaps:
 
-This desugars to an expression where the `print` call executes its side effect before the remainder of the block continues with access to the binding `x`. This mechanism allows natural mixing of binding constructs and effectful computations while maintaining the clear separation between binding and usage.
-
-The nested block syntax preserves all the static reasoning properties of the explicit form. Variable bindings remain syntactically apparent, scope boundaries are clearly delineated, and the desugaring process produces standard lambda calculus constructs that can be analyzed and optimized using conventional techniques.
-
-## Macro definitions
-
-To complete the macro system, we need mechanisms for defining constructs that can observe and manipulate the syntactic structure of explicitly marked bindings.
-
-Macro definitions are distinguished from regular function definitions through a syntactic marker. A macro definition uses the `#` prefix (e.g., `#f = ...`), while regular function definitions use standard syntax (e.g., `:f = ...`). The environment tracks both the names in scope and their classification as either macros or regular values. This distinction matters only during the desugaring phase when translating to call-by-value lambda calculus; it does not impact the evaluation rules, which can continue to use standard lambda calculus environments.
-
-When a macro is applied to arguments, its arguments undergo a static transformation that makes syntactic structure observable. Arguments are wrapped in data structures that preserve the distinction between evaluated expressions and syntactic elements that contain explicit bindings. This transformation occurs during the desugaring phase, before any evaluation takes place, and relies only on syntactic information.
+**For the enclosing scope:**
 
 \begin{small}
 \begin{align}
-x &\to \text{Value}(x) \\
-:x &\to \text{Binding}(\text{"x"}) \\
-\{ \ldots \} &\to \text{Block}(\ldots) \\
-f(x, y) &\to \text{Value}(f(x, y)) \\
-f(x, :y) &\to \text{Call}(\text{Value}(f), [\text{Value}(x), \text{Binding}(\text{"y"})]) \\
-:f(x, y) &\to \text{Call}(\text{Binding}(\text{"f"}), [\text{Value}(x), \text{Value}(y)])
+x &\to \textsc{Val}(x) \\
+:x &\to \textsc{Bind}(\text{"x"}) \\
+\{ \ldots \} &\to \textsc{Block}(\lambda\ldots) \\
+f(x, y) &\to \textsc{Val}(f(x, y)) \\
+f(:x, y) &\to \textsc{Call}(\textsc{Val}(f), [\textsc{Bind}(\text{"x"}), \textsc{Val}(y)])
 \end{align}
 \end{small}
 
-In the case of `f(x, :y)`, the presence of the explicit binding `:y` prevents the entire expression from being evaluated. Instead, it is preserved as a `Call` structure that contains both evaluated components (`Value(x)`) and syntactic components (`Binding("y")`). This selective preservation allows macros to observe syntactic structure precisely where it is explicitly marked, while maintaining referential transparency for unmarked subexpressions.
+**For explicit scope arguments:**
 
-More formally, when a macro $f$ is applied to arguments $a_1, a_2, \ldots, a_n$, each argument $a_i$ is transformed according to the function $\text{wrap}(a_i)$ defined as:
+\begin{small}
+\begin{align}
+^\wedge{x} &\to \textsc{Val}(x) \\
+x &\to \textsc{Bind}(\text{"x"}) \\
+\{ \ldots \} &\to \textsc{Block}(\lambda\ldots) \\
+^\wedge{f}(^\wedge{x}, ^\wedge{y}) &\to \textsc{Val}(f(x, y)) \\
+^\wedge{f}(x, ^\wedge{y}) &\to \textsc{Call}(\textsc{Val}(f), [\textsc{Bind}(\text{"x"}), \textsc{Val}(y)])
+\end{align}
+\end{small}
+
+This selective preservation allows macros to observe syntactic structure precisely where it is explicitly marked, while maintaining referential transparency for unmarked subexpressions.
+
+# Lambda Transformation
+
+We will now formalize the macro system by presenting an algorithm that translates bindings and blocks to call-by-value lambda calculus. The algorithm consists of three individual translations:
+
+1. A translation of macro arguments into arguments wrapped with syntactic annotations.
+2. A translation of a sequence of expressions that might include explicit bindings inside of an enclosing scope into nested lambda abstractions.
+3. A translation of function calls with implicit bindings and explicit block arguments into lambda abstractions.
+
+Since the last two translations depend on the first translation, we will begin by formalizing the notion of wrapping macro arguments with runtime tags that was outlined informally in the last section.
+
+## Macro argument wrapping
+
+To be able to use the same algorithm for both enclosing scopes and explicit block arguments, we abstract over the specific syntax by distinguishing _binding names_ from other names and define binding names as an explicit binding in the context of an enclosing scope or an implicit binding in the context of explicit block arguments, which captures the duality of these contexts.
+
+When a macro $f$ is applied to arguments $a_1, a_2, \ldots, a_n$, each argument $a_i$ is transformed according to the function $\text{wrap}(a_i)$ defined as:
 
 $\text{wrap}(a) = \begin{cases}
-\text{Binding}(\text{name}) \\\quad \text{if } a \text{ is a binding expression } :name \\
-\text{Block}(\text{content}) \\\quad \text{if } a \text{ is a block expression } \{ \ldots \} \\
-\text{Call}(\text{wrap}(f), [\text{wrap}(a_1), \ldots, \text{wrap}(a_n)]) \\\quad \text{if } a = f(a_1, \ldots, a_n) \\\quad \text{and } \text{wrap}(f) \neq \text{Value}(\ldots) \\
-\text{Call}(\text{wrap}(f), [\text{wrap}(a_1), \ldots, \text{wrap}(a_n)]) \\\quad \text{if } a = f(a_1, \ldots, a_n) \\\quad \text{and } f \text{ is not a macro} \\\quad \text{and any } \text{wrap}(a_i) \neq \text{Value}(\ldots) \\
-\text{Value}(a) \\\quad \text{otherwise}
+\textsc{Bind}(\text{name}) \\\quad \text{if } a \text{ is a binding name } \\
+\textsc{Block}(\text{content}) \\\quad \text{if } a \text{ is a block expression } \{ \ldots \} \\
+\textsc{Call}(\text{wrap}(f), [\text{wrap}(a_1), \ldots, \text{wrap}(a_n)]) \\\quad \text{if } a = f(a_1, \ldots, a_n) \\\quad \text{and } \text{wrap}(f) \neq \textsc{Val}(\ldots) \\
+\textsc{Call}(\text{wrap}(f), [\text{wrap}(a_1), \ldots, \text{wrap}(a_n)]) \\\quad \text{if } a = f(a_1, \ldots, a_n) \\\quad \text{and } f \text{ is not a macro} \\\quad \text{and any } \text{wrap}(a_i) \neq \textsc{Val}(\ldots) \\
+\textsc{Val}(a) \\\quad \text{otherwise}
 \end{cases}$
 
-## Multi-level bindings
+We consider built-in data structures such as tuples as function calls that build up these data structures, so that a tuple such as `(x, y)` can be treated as the call `tuple(x, y)` for the purposes of macro argument wrapping.
 
-The basic explicit binding mechanism supports bindings that are active in the immediately following scope, but many programming constructs require bindings that persist across multiple scope levels. A prominent example is the definition of a recursive function, where the function being defined must be available both within its own definition (for recursive calls) and in the scope following the definition (for external use).
+Notice that our algorithm supports bindings being used in the position of a function that is applied to arguments. This is useful if the goal is to expose and match against the structure of nested data structures, similar to the polymorphism supported in pattern calculus [@jay2004pattern].
 
-Multi-level bindings extend the explicit binding syntax to support this pattern through repeated markers. A binding `::x` remains active for the next two scopes, `:::x` for three scopes, and so on.
+Another possibility would be to disallow bindings to be used as functions in the context of an enclosing scope and to treat a function without a `^` marker as a _value_ instead of a binding name in the context of block arguments. This would lead to fewer annotations at the price of breaking the duality between the two contexts.
 
-Consider the definition of a recursive function:
+## Enclosing scope
+
+For enclosing scope contexts, expressions containing explicit bindings are converted to lambda abstractions that bind variables for the remainder of the scope.
 
 ```java
-{
-  ::factorial(:n) = {
-    if(n == 0, 1, n * factorial(n - 1))
-  },
-  factorial(5)
-}
+(:x, :y) = point
+use_point(x, y)
 ```
 
-The `::factorial` binding with two markers indicates that the function will be available both within its own definition (enabling the recursive call `factorial(n - 1)`) and in the subsequent scope (enabling the call `factorial(5)`).
+With `WRAP` as the translation described in the last section and `x => y` as a lambda abstraction with argument `x` and body `y`, the above desugars to:
 
-The multi-level binding mechanism preserves static analyzability by making the scope lifetime explicit in the syntax. A static analyzer can determine the availability of any identifier by counting binding markers and tracking scope nesting levels, without requiring knowledge of the specific constructs being used.
+```java
+(=)(
+  WRAP((:x, :y)),
+  point,
+  x => y => use_point(x, y)
+)
+```
+
+If an expression does not contain any explicit bindings, it is treated as a side effect and passed as an argument to a lambda abstraction that ignores its argument, which effectively sequences the side effects in the expected order:
+
+```java
+f(x, y)
+g(z)
+```
+
+Desugars to:
+
+```java
+(_ => g(z))(f(x, y))
+```
+
+The translation of a whole block is then a fold over the sequence of expressions, starting with the last expression of the block as the initial element:
+
+```java
+(:x, :y) = point
+f(x, y)
+use_point(x, y)
+```
+
+Desugars to:
+
+```java
+(=)(
+  WRAP((:x, :y)),
+  point,
+  x => y => ((_ => g(z))(f(x, y)))
+)
+```
+
+More formally, TODO: ...
+
+Notice that as a consequence of using enclosing blocks as the mechanism for both binding variables and sequencing effects, it is not possible to use a macro without binding any variables. For example, it is not possible to use destructuring assignment to match the value `x` against the value `y` by writing it as `x = y`, because it would be interpreted as a side effect due to its lack of explicit bindings. We consider this acceptable but note that explicit syntax could be introduced to distinguish these two cases.
+
+## Block arguments
+
+For block argument contexts, the lambda translation is determined by the implicit bindings that precede the block argument in the abstract syntax tree.
+
+```java
+(x, y) -> { use_point(x, y) }
+```
+
+Desugars to:
+
+```java
+(->)(
+  WRAP((x, y)),
+  x => y => use_point(x, y)
+)
+```
+
+TODO: extend the following definition to include the `wrap` function:
+
+More precisely, implicit bindings and explicit uses in the presence of block scope arguments are translated to lambda terms as follows: A function call $f(f_1, \ldots, f_{m-1}, \{ \text{body} \}, f_{m+1}, \ldots, f_n)$ where $\{ \text{body} \}$ is a block argument at position $m$ desugars the block $\{ \text{body} \}$ to a lambda abstraction that binds all variables occurring in the arguments $f_0, \ldots, f_{m-1}$ that are not explicit marked as being used and have not been bound by other blocks appearing earlier in those arguments. The block $\{ \text{body} \}$ is transformed into $\lambda x_1 \ldots x_k. \text{body}$ where $x_1, \ldots, x_k$ are the implicit bindings from the preceding arguments.
 
 # Related work
 
